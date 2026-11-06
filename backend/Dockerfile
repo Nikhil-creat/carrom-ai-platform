@@ -2,7 +2,7 @@
 FROM python:3.11-slim AS builder
 WORKDIR /build
 COPY requirements.txt .
-# CPU-only torch keeps the image ~2 GB smaller than the default CUDA wheel
+# torch is optional (requirements-ml.txt) and left out: the AI and vision work without it and it needs ~400 MB RAM
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
  && pip install --no-cache-dir --prefix=/install "psycopg[binary]>=3.1"
 

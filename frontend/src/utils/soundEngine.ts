@@ -4,7 +4,7 @@ type Kind = 'striker_hit' | 'coin_hit' | 'border' | 'pocket' | 'turn' | 'win' | 
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
-  muted = false;
+  muted = (() => { try { return localStorage.getItem('carrom_muted') === '1'; } catch { return false; } })();
 
   unlock(): void {
     if (!this.ctx) {
@@ -18,7 +18,11 @@ class SoundEngine {
     if (this.ctx.state === 'suspended') void this.ctx.resume();
   }
 
-  setMuted(m: boolean): void { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 0.6; }
+  setMuted(m: boolean): void {
+    this.muted = m;
+    try { localStorage.setItem('carrom_muted', m ? '1' : '0'); } catch { /* storage unavailable */ }
+    if (this.master) this.master.gain.value = m ? 0 : 0.6;
+  }
 
   private tone(freq: number, dur: number, type: OscillatorType, gain: number, when = 0, slideTo?: number): void {
     if (!this.ctx || !this.master) return;

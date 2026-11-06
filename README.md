@@ -21,6 +21,7 @@ Without Docker (backend needs Python 3.11+, frontend needs Node 20+):
 
 ```bash
 cd backend  && pip install -r requirements.txt && uvicorn main:app --port 8000
+#   (optional, for CNN/PPO training: pip install -r requirements-ml.txt)
 cd frontend && npm install && npm run dev        # http://localhost:5173, proxies /api and /ws to :8000
 cd backend  && pytest                            # 22 tests
 ```

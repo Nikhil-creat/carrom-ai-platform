@@ -1,2 +1,3 @@
-# Optional ML deps (CNN/PPO training)
+# Optional: only for training/serving the CNN patch classifier and the PPO policy.
+# pip install -r requirements.txt -r requirements-ml.txt   (use the CPU wheel index on servers)
 torch>=2.3

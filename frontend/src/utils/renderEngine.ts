@@ -13,6 +13,7 @@ export interface DrawState {
   highlightBaseline: Slot | null;
   pulse: number;
   shake: number;
+  glow: boolean;          // it is your turn: halo on the striker
 }
 
 const COLORS: Record<CoinType, { fill: string; ring: string }> = {
@@ -40,11 +41,22 @@ export function stepParticles(list: Particle[], dt: number): void {
 }
 
 function drawBoardSurface(ctx: CanvasRenderingContext2D, pulseSlot: Slot | null, pulse: number): void {
-  ctx.fillStyle = '#5b3a1e'; ctx.fillRect(-30, -30, BOARD + 60, BOARD + 60);           // wooden frame
+  const wood = ctx.createLinearGradient(-30, -30, BOARD + 30, BOARD + 30);
+  wood.addColorStop(0, '#6a4222'); wood.addColorStop(0.5, '#4d2f17'); wood.addColorStop(1, '#6a4222');
+  ctx.fillStyle = wood; ctx.fillRect(-30, -30, BOARD + 60, BOARD + 60);                // wooden frame
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 1;                              // wood grain
+  for (let i = -30; i < BOARD + 30; i += 9) { ctx.beginPath(); ctx.moveTo(i, -30); ctx.bezierCurveTo(i + 6, 200, i - 6, 520, i + 2, BOARD + 30); ctx.stroke(); }
   ctx.fillStyle = '#9b6b3a'; ctx.fillRect(-14, -14, BOARD + 28, BOARD + 28);
+  ctx.fillStyle = '#7c5228'; ctx.fillRect(-14, -14, BOARD + 28, 4); ctx.fillRect(-14, -14, 4, BOARD + 28);
   const g = ctx.createLinearGradient(0, 0, BOARD, BOARD);
   g.addColorStop(0, '#f1d9a6'); g.addColorStop(1, '#e6c88c');
   ctx.fillStyle = g; ctx.fillRect(0, 0, BOARD, BOARD);                                  // playing surface
+  const sh = ctx.createLinearGradient(0, 0, 0, 40);                                      // cushion shadow
+  sh.addColorStop(0, 'rgba(0,0,0,0.22)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = sh; ctx.fillRect(0, 0, BOARD, 40);
+  const sl = ctx.createLinearGradient(0, 0, 40, 0);
+  sl.addColorStop(0, 'rgba(0,0,0,0.18)'); sl.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = sl; ctx.fillRect(0, 0, 40, BOARD);
   ctx.strokeStyle = '#b3402f'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(BOARD / 2, BOARD / 2, 85, 0, 7); ctx.stroke();               // centre rings
   ctx.beginPath(); ctx.arc(BOARD / 2, BOARD / 2, 18, 0, 7); ctx.stroke();
@@ -66,6 +78,7 @@ function drawBoardSurface(ctx: CanvasRenderingContext2D, pulseSlot: Slot | null,
     const r = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, p.radius);
     r.addColorStop(0, '#000'); r.addColorStop(1, '#1b1411');
     ctx.fillStyle = r; ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#5b3a1e'; ctx.lineWidth = 3; ctx.stroke();                          // pocket rim
   }
 }
 
@@ -109,6 +122,12 @@ export function drawScene(ctx: CanvasRenderingContext2D, size: number, s: DrawSt
       ctx.beginPath(); ctx.moveTo(path.coinLine[0].x, path.coinLine[0].y); ctx.lineTo(path.coinLine[1].x, path.coinLine[1].y); ctx.stroke();
     }
     ctx.restore();
+  }
+  if (sp && s.glow) {
+    const pr = STRIKER_R + 10 + 4 * Math.sin(s.pulse * 5);
+    const halo = ctx.createRadialGradient(sp.x, sp.y, STRIKER_R * 0.6, sp.x, sp.y, pr + 8);
+    halo.addColorStop(0, 'rgba(255,214,102,0.55)'); halo.addColorStop(1, 'rgba(255,214,102,0)');
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(sp.x, sp.y, pr + 8, 0, 7); ctx.fill();
   }
   if (sp) drawDisc(ctx, sp.x, sp.y, STRIKER_R, 'striker');
 

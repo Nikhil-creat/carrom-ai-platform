@@ -6,13 +6,14 @@ import { create } from 'zustand';
 import { sound } from '../utils/soundEngine';
 import { computeChecksum, q } from '../utils/checksum';
 import {
-  BASELINE_MAX_X, BASELINE_MIN_X, BASELINE_Y, MAX_IMPULSE, POCKETS, type AiDecision, type CoinType, type PhysEvent,
+  BASELINE_Y, MAX_IMPULSE, POCKETS, type AiDecision, type CoinType, type PhysEvent,
   type ServerMessage, type ShotPayload, type Slot, type Snapshot, type TurnSummary,
 } from '../types';
 import { angleToDir } from '../utils/aim';
 import { WS_BASE } from '../config';
 
 export interface Body { id: string; type: CoinType; x: number; y: number; pocketed: boolean }
+export interface Toast { id: number; text: string; tone: 'info' | 'good' | 'warn' }
 export interface LogLine { id: number; kind: 'chat' | 'system' | 'turn'; from?: string; text: string }
 
 interface Playback {
@@ -39,6 +40,9 @@ interface Store {
   error: string | null;
   latencyMs: number;
   spectators: number;
+  roomCode: string | null;
+  toasts: Toast[];
+  clockOffset: number;        // server time - local time (ms); phones are often seconds off
   pendingShot: { x: number; angle: number; force: number; firedAt: number } | null;
   connect: (o: { roomId: string; userId: string; name: string; role?: 'player' | 'spectator'; code?: string }) => void;
   disconnect: () => void;
@@ -47,11 +51,12 @@ interface Store {
   sendChat: (text: string) => void;
   sendEmoji: (emoji: string) => void;
   setPreviewStriker: (p: { x: number; y: number } | null) => void;
+  pushToast: (text: string, tone?: Toast['tone']) => void;
   tick: (nowMs: number) => PhysEvent[];
 }
 
 let ws: WebSocket | null = null;
-let logId = 1, emojiId = 1, pingTimer: number | undefined, reconnectTimer: number | undefined, lastOpts: Parameters<Store['connect']>[0] | null = null;
+let logId = 1, emojiId = 1, toastId = 1, pingTimer: number | undefined, reconnectTimer: number | undefined, lastOpts: Parameters<Store['connect']>[0] | null = null;
 let attempts = 0;
 let pb: Playback = emptyPlayback();
 const BUFFER_FRAMES = 6;
@@ -70,13 +75,13 @@ function bodiesFromSnapshot(s: Snapshot): Body[] {
 export const useGame = create<Store>((set, get) => ({
   status: 'idle', userId: '', name: '', roomId: null, slot: null, role: 'player', snapshot: null, bodies: [],
   animating: false, previewStriker: null, opponentPreview: null, turnDeadline: 0, turnSeconds: 30,
-  thoughts: [], log: [], emojis: [], lastTurn: null, gameOver: null, error: null, latencyMs: 0, spectators: 0, pendingShot: null,
+  thoughts: [], log: [], emojis: [], lastTurn: null, gameOver: null, error: null, latencyMs: 0, spectators: 0, roomCode: null, toasts: [], clockOffset: 0, pendingShot: null,
 
   connect: (o) => {
     lastOpts = o;
     window.clearTimeout(reconnectTimer);
     ws?.close();
-    set({ status: 'connecting', userId: o.userId, name: o.name, roomId: o.roomId, error: null, gameOver: null });
+    set({ status: 'connecting', userId: o.userId, name: o.name, roomId: o.roomId, roomCode: o.code ?? null, error: null, gameOver: null });
     const qs = new URLSearchParams({ user_id: o.userId, name: o.name, role: o.role ?? 'player' });
     if (o.code) qs.set('code', o.code);
     const sock = new WebSocket(`${WS_BASE}/ws/${o.roomId}?${qs}`);
@@ -84,6 +89,7 @@ export const useGame = create<Store>((set, get) => ({
     sock.onopen = () => {
       attempts = 0;
       set({ status: 'open' });
+      sock.send(JSON.stringify({ event: 'PING', t: performance.now() }));   // measures latency + server clock offset
       window.clearInterval(pingTimer);
       pingTimer = window.setInterval(() => sock.readyState === 1 && sock.send(JSON.stringify({ event: 'PING', t: performance.now() })), 5000);
     };
@@ -102,13 +108,13 @@ export const useGame = create<Store>((set, get) => ({
   disconnect: () => {
     lastOpts = null; window.clearTimeout(reconnectTimer); window.clearInterval(pingTimer);
     ws?.close(); ws = null; pb = emptyPlayback();
-    set({ status: 'idle', roomId: null, slot: null, snapshot: null, bodies: [], thoughts: [], log: [], gameOver: null, animating: false });
+    set({ status: 'idle', roomId: null, roomCode: null, slot: null, snapshot: null, bodies: [], thoughts: [], log: [], toasts: [], gameOver: null, animating: false, error: null, pendingShot: null });
   },
 
   fire: (s) => {
     const st = get();
     if (!ws || ws.readyState !== 1 || !st.slot || !st.roomId) return;
-    const ts = Date.now();
+    const ts = Date.now() + st.clockOffset;
     const fields = { x: q(s.striker_x, 2), angle: q(s.angle_rad, 6), force: q(Math.min(Math.max(s.impulse_force, 0), MAX_IMPULSE), 3), top: q(s.top_spin ?? 0, 3), side: q(s.side_spin ?? 0, 3) };
     const payload = {
       striker_position: { x: fields.x, y: BASELINE_Y[st.slot] }, angle_rad: fields.angle, impulse_force: fields.force,
@@ -124,6 +130,11 @@ export const useGame = create<Store>((set, get) => ({
   sendChat: (text) => { if (ws?.readyState === 1 && text.trim()) ws.send(JSON.stringify({ event: 'CHAT', text })); },
   sendEmoji: (emoji) => { if (ws?.readyState === 1) ws.send(JSON.stringify({ event: 'EMOJI', emoji })); },
   setPreviewStriker: (p) => set({ previewStriker: p }),
+  pushToast: (text, tone = 'info') => {
+    const id = toastId++;
+    set({ toasts: [...get().toasts.slice(-2), { id, text, tone }] });
+    window.setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), 3200);
+  },
 
   /** Advance playback to `nowMs`. Returns physics events that are due (for sound/particles). */
   tick: (nowMs) => {
@@ -189,7 +200,7 @@ function handle(m: ServerMessage, set: S, get: G): void {
       break;
     case 'TURN_START':
       set({ snapshot: m.snapshot, turnDeadline: performance.now() + (m.turn_seconds ?? 30) * 1000, turnSeconds: m.turn_seconds ?? 30 });
-      if (m.slot === get().slot) sound.play('turn');
+      if (m.slot === get().slot && get().role === 'player') { sound.play('turn'); get().pushToast('Your turn', 'good'); }
       if (!get().animating) set({ bodies: bodiesFromSnapshot(m.snapshot) });
       break;
     case 'TURN_TIMEOUT':
@@ -227,6 +238,16 @@ function handle(m: ServerMessage, set: S, get: G): void {
       // let playback finish the last frames, then snap to the authoritative snapshot
       const wait = pb.total > 0 ? Math.max(0, ((pb.total - pb.next) / 60) * 1000 + 60) : 0;
       window.setTimeout(finish, Math.min(wait, 1500));
+      {
+        const who = m.summary.slot === get().slot ? 'You' : 'Opponent';
+        const n = m.summary.pocketed.filter((id) => id !== 'striker').length;
+        if (m.summary.foul) get().pushToast(`${who} fouled: ${m.summary.foul_reason}`, 'warn');
+        else if (m.summary.queen_event === 'pending') get().pushToast(`${who} pocketed the queen. Cover it!`, 'info');
+        else if (m.summary.queen_event === 'covered') get().pushToast(`${who} covered the queen!`, 'good');
+        else if (m.summary.queen_event === 'returned') get().pushToast('Queen returned to the centre', 'warn');
+        else if (n > 0) get().pushToast(`${who} pocketed ${n} coin${n > 1 ? 's' : ''}`, who === 'You' ? 'good' : 'info');
+        else if (m.summary.slot === get().slot) get().pushToast('No pocket', 'info');
+      }
       if (m.summary.foul) { sound.play('foul'); addLog(get, set, 'turn', `Foul: ${m.summary.foul_reason}`); }
       if (m.summary.queen_event) addLog(get, set, 'turn', `Queen ${m.summary.queen_event}`);
       if (m.summary.pocketed.length) addLog(get, set, 'turn', `${m.summary.slot} pocketed ${m.summary.pocketed.join(', ')}`);
@@ -245,7 +266,11 @@ function handle(m: ServerMessage, set: S, get: G): void {
       window.setTimeout(() => set({ emojis: get().emojis.filter((x) => x.id !== id) }), 2600);
       break;
     }
-    case 'PONG': set({ latencyMs: Math.round(performance.now() - m.t) }); break;
+    case 'PONG': {
+      const rtt = performance.now() - m.t;
+      set({ latencyMs: Math.round(rtt), clockOffset: Math.round(m.server_time - (Date.now() - rtt / 2)) });
+      break;
+    }
     case 'KICKED': set({ error: `Removed from the room: ${m.reason}` }); break;
     case 'ERROR': {
       const snap = get().snapshot;   // a rejected shot: drop the local prediction and show the real board
@@ -257,4 +282,3 @@ function handle(m: ServerMessage, set: S, get: G): void {
   }
 }
 
-export const clampX = (x: number): number => Math.min(BASELINE_MAX_X, Math.max(BASELINE_MIN_X, x));

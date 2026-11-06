@@ -52,3 +52,16 @@ export function predictPath(start: Pt, angle: number, strikerR: number, obstacle
   }
   return { points, ghost: null, hitId: null, coinLine: null };
 }
+
+export interface PullShot { angle: number; force01: number; force: number }
+
+/** Slingshot maths: pulling the pointer back from the striker shoots the opposite way; longer pull = harder. */
+export function shotFromPull(strikerX: number, baselineY: number, pointer: Pt | null,
+                             maxPull = 170, minPull = 12, maxImpulse = 20): PullShot | null {
+  if (!pointer) return null;
+  const vx = strikerX - pointer.x, vy = baselineY - pointer.y;
+  const len = Math.hypot(vx, vy);
+  if (len < minPull) return null;
+  const force01 = Math.min(1, len / maxPull);
+  return { angle: dirToAngle({ x: vx / len, y: vy / len }), force01, force: force01 * maxImpulse };
+}

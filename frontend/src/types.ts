@@ -1,5 +1,6 @@
 // Wire protocol + shared types. Mirrors backend/multiplayer/manager.py and physics/rules.py.
 export type Slot = 'p1' | 'p2';
+export type Difficulty = 'beginner' | 'intermediate' | 'grandmaster';
 export type CoinType = 'queen' | 'white' | 'black' | 'striker';
 
 export const BOARD = 740;

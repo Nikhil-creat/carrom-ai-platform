@@ -99,7 +99,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Carrom AI Platform", version="1.0.0", lifespan=lifespan)
 origins = [o.strip() for o in settings.allowed_origins.split(",")]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=settings.allowed_origin_regex,
+                   allow_methods=["*"], allow_headers=["*"])
 
 
 class CreateRoom(BaseModel):
@@ -117,6 +118,11 @@ class JoinCode(BaseModel):
 class QueueJoin(BaseModel):
     user_id: str = Field(min_length=1, max_length=64)
     name: str = Field(default="Player", max_length=32)
+
+
+@app.get("/")
+async def root() -> dict[str, str]:
+    return {"service": "carrom-ai-platform", "status": "ok", "health": "/health", "docs": "/docs"}
 
 
 @app.get("/health")
