@@ -1,0 +1,2 @@
+# Optional ML deps (CNN/PPO training)
+torch>=2.3
