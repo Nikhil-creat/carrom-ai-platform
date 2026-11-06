@@ -1,0 +1,78 @@
+# Carrom AI platform: nginx (edge, TLS) -> frontend (static) + backend (FastAPI) -> redis + postgres/pgvector
+# Up:   cp .env.example .env && docker compose up --build
+# Open: https://localhost  (self-signed cert on first run: accept the browser warning) or http://localhost
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      backend: { condition: service_healthy }
+      frontend: { condition: service_started }
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx-locations.inc:/etc/nginx/conf.d/locations.inc:ro
+      - certs:/etc/nginx/certs
+    # create a self-signed certificate on first boot if you have not mounted your own at /etc/nginx/certs
+    entrypoint: >
+      sh -c "[ -f /etc/nginx/certs/tls.crt ] || (apk add --no-cache openssl >/dev/null &&
+      openssl req -x509 -nodes -newkey rsa:2048 -days 365 -subj '/CN=localhost'
+      -keyout /etc/nginx/certs/tls.key -out /etc/nginx/certs/tls.crt) && exec nginx -g 'daemon off;'"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://carrom:${POSTGRES_PASSWORD:-carrom_dev_pw}@postgres:5432/carrom
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      TURN_SECONDS: ${TURN_SECONDS:-30}
+      DISCONNECT_GRACE_SECONDS: ${DISCONNECT_GRACE_SECONDS:-30}
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10 }
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: carrom
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-carrom_dev_pw}
+      POSTGRES_DB: carrom
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U carrom -d carrom"], interval: 5s, timeout: 3s, retries: 15 }
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes: ["./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    profiles: ["observability"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment: { GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}" }
+    volumes: ["./infra/grafana/provisioning:/etc/grafana/provisioning:ro"]
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+    profiles: ["observability"]   # docker compose --profile observability up
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  certs:
